@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & Vet (Linux x86_64)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@v4
+
+      - name: Checkout libopencie-pkcs11
+        uses: actions/checkout@v4
+        with:
+          repository: M0Rf30/opencie-pkcs11
+          path: opencie-pkcs11
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ \
+            libcrypto++-dev libcurl4-openssl-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libpcsclite-dev libpng-dev libssl-dev libxml2-dev \
+            meson ninja-build pkg-config
+
+      - name: Build & install libopencie-pkcs11
+        working-directory: opencie-pkcs11
+        run: |
+          meson setup builddir --buildtype=release --prefix=/usr
+          meson compile -C builddir
+          sudo meson install -C builddir
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Verify gofmt
+        run: |
+          fmtout=$(gofmt -l .)
+          if [ -n "$fmtout" ]; then
+            echo "gofmt found unformatted files:"
+            echo "$fmtout"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...

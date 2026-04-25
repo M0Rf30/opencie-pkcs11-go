@@ -175,8 +175,8 @@ func GetInfo() (*Info, error) {
 		return nil, RV(rv)
 	}
 	info := &Info{
-		CryptokiVersion:    [2]byte{byte(cInfo.cryptokiVersion.major), byte(cInfo.cryptokiVersion.minor)},
-		ManufacturerID:     C.GoString((*C.char)(unsafe.Pointer(&cInfo.manufacturerID[0]))),
+		CryptokiVersion: [2]byte{byte(cInfo.cryptokiVersion.major), byte(cInfo.cryptokiVersion.minor)},
+		ManufacturerID:  C.GoString((*C.char)(unsafe.Pointer(&cInfo.manufacturerID[0]))),
 		// Flags field is not accessible due to struct alignment issues with cgo
 		Flags:              0,
 		LibraryDescription: C.GoString((*C.char)(unsafe.Pointer(&cInfo.libraryDescription[0]))),

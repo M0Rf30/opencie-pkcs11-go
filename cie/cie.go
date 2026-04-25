@@ -18,12 +18,12 @@ typedef unsigned long CK_RV;
 
 #include <opencie/cie_ext.h>
 
-// Note: Callback support is limited. For full callback functionality,
-// a more complex cookie-based mechanism would be required.
-// For now, callbacks can be passed as nil to C functions that accept NULL.
+// Note: Callback support is not implemented. The C API allows NULL
+// for all callback parameters, so we always pass NULL.
 */
 import "C"
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 )
@@ -37,28 +37,30 @@ func (r RV) Error() string {
 }
 
 const (
-	// CKR_OK indicates success
+	// CKR_OK indicates success.
 	CKR_OK = RV(0x00000000)
+	// CKR_BUFFER_TOO_SMALL is returned when an output buffer is undersized.
+	CKR_BUFFER_TOO_SMALL = RV(0x00000150)
 )
 
 const (
-	// MaxLen is the maximum length for strings in VerifyInfo
+	// MaxLen is OPENCIE_MAX_LEN from cie_ext.h.
 	MaxLen = 512
+	// rvCountLimit separates "this is a count" from "this is a CKR_*" return.
+	// cie_verify and cie_get_sign_count return either a count (small) or a
+	// CKR_* error code on failure. PKCS#11 error codes are >= 0x00000001 and
+	// in practice >= 0x00000050; we treat anything below 0x1000 as a count.
+	rvCountLimit C.CK_RV = 0x1000
 )
 
-// ProgressCallback is called periodically during long operations.
-// Note: Go callbacks cannot be directly passed to C. This is a placeholder type.
-// Pass nil to functions that accept progress callbacks.
+// ProgressCallback is a placeholder type. Go callbacks are not currently
+// passed through cgo to the C library; pass nil to functions that accept it.
 type ProgressCallback func(progress int, message string) error
 
-// CompletedCallback is called once when enrolment finishes.
-// Note: Go callbacks cannot be directly passed to C. This is a placeholder type.
-// Pass nil to functions that accept completed callbacks.
+// CompletedCallback is a placeholder type. Pass nil.
 type CompletedCallback func(pan, name, serial string) error
 
-// SignCompletedCallback is called once when signing finishes.
-// Note: Go callbacks cannot be directly passed to C. This is a placeholder type.
-// Pass nil to functions that accept sign-completed callbacks.
+// SignCompletedCallback is a placeholder type. Pass nil.
 type SignCompletedCallback func(ret int) error
 
 // VerifyInfo contains information about a signature verification.
@@ -74,8 +76,8 @@ type VerifyInfo struct {
 }
 
 // Enable enrolls a CIE card identified by PAN using the 8-digit PIN.
-// Note: Callbacks are not fully supported in this binding. Pass nil for both callbacks.
 // attempts will be set to the remaining PIN attempts on error if non-nil.
+// Callbacks are not currently supported; pass nil.
 func Enable(pan, pin string, attempts *int, progress ProgressCallback, completed CompletedCallback) error {
 	cPan := C.CString(pan)
 	cPin := C.CString(pin)
@@ -88,8 +90,6 @@ func Enable(pan, pin string, attempts *int, progress ProgressCallback, completed
 		attemptsPtr = &cAttempts
 	}
 
-	// Note: Passing NULL for callbacks. Full callback support would require
-	// a cookie-based mechanism with //export functions.
 	rv := C.cie_enable(cPan, cPin, attemptsPtr, nil, nil)
 
 	if attempts != nil {
@@ -126,7 +126,6 @@ func Disable(pan string) error {
 
 // ChangePin changes the PIN from currentPIN to newPIN.
 // attempts will be set to remaining attempts on error if non-nil.
-// Note: progress callback is not supported; pass nil.
 func ChangePin(currentPIN, newPIN string, attempts *int, progress ProgressCallback) error {
 	cCurrent := C.CString(currentPIN)
 	cNew := C.CString(newPIN)
@@ -153,7 +152,6 @@ func ChangePin(currentPIN, newPIN string, attempts *int, progress ProgressCallba
 
 // UnblockPin unblocks the PIN using the PUK and sets a new PIN.
 // attempts will be set to remaining PUK attempts on error if non-nil.
-// Note: progress callback is not supported; pass nil.
 func UnblockPin(puk, newPIN string, attempts *int, progress ProgressCallback) error {
 	cPuk := C.CString(puk)
 	cNew := C.CString(newPIN)
@@ -178,13 +176,23 @@ func UnblockPin(puk, newPIN string, attempts *int, progress ProgressCallback) er
 	return nil
 }
 
-// Sign signs a PDF file on behalf of the card identified by pan.
-// sigType: signature type string (e.g., "PDF", "P7M")
-// page: page index (0-based) for the signature widget
-// x, y, w, h: position and size of the signature widget in points
-// imagePath: path to an optional signature image; may be empty
-// Note: callbacks are not supported; pass nil.
-func Sign(inFile, sigType, pin, pan string, page int, x, y, w, h float32, imagePath, outFile string, progress ProgressCallback, signCompleted SignCompletedCallback) error {
+// Sign signs a PDF on behalf of the card identified by pan.
+//
+// sigType is the signature type string ("PDF", "P7M", ...).
+// page is the 0-based page index for the signature widget.
+// x, y, w, h define the widget position and size in PDF points.
+// imageData is the raw bytes of an optional signature image; pass nil for none.
+//
+// Callbacks are not currently supported; pass nil.
+func Sign(
+	inFile, sigType, pin, pan string,
+	page int,
+	x, y, w, h float32,
+	imageData []byte,
+	outFile string,
+	progress ProgressCallback,
+	signCompleted SignCompletedCallback,
+) error {
 	cInFile := C.CString(inFile)
 	cType := C.CString(sigType)
 	cPin := C.CString(pin)
@@ -196,15 +204,19 @@ func Sign(inFile, sigType, pin, pan string, page int, x, y, w, h float32, imageP
 	defer C.free(unsafe.Pointer(cPan))
 	defer C.free(unsafe.Pointer(cOutFile))
 
-	var cImagePath *C.char
-	if imagePath != "" {
-		cImagePath = C.CString(imagePath)
-		defer C.free(unsafe.Pointer(cImagePath))
+	var cImageData *C.uchar
+	var cImageLen C.int
+	if len(imageData) > 0 {
+		cImageData = (*C.uchar)(unsafe.Pointer(&imageData[0]))
+		cImageLen = C.int(len(imageData))
 	}
 
-	rv := C.cie_sign(cInFile, cType, cPin, cPan, C.int(page),
+	rv := C.cie_sign(
+		cInFile, cType, cPin, cPan, C.int(page),
 		C.float(x), C.float(y), C.float(w), C.float(h),
-		cImagePath, cOutFile, nil, nil)
+		cImageData, cImageLen,
+		cOutFile, nil, nil,
+	)
 
 	if rv != C.CKR_OK {
 		return RV(rv)
@@ -213,9 +225,11 @@ func Sign(inFile, sigType, pin, pan string, page int, x, y, w, h float32, imageP
 }
 
 // Verify verifies a signed document.
-// proxyAddr: HTTP proxy address; may be empty
-// proxyPort: HTTP proxy port (0 = no proxy)
-// usrPass: proxy username:password; may be empty
+//
+// proxyAddr is an optional HTTP proxy address (empty for none).
+// proxyPort is the proxy port (0 for none).
+// usrPass is the optional proxy "user:pass" credential string.
+//
 // Returns the number of valid signatures found.
 func Verify(inFile, proxyAddr string, proxyPort int, usrPass string) (int, error) {
 	cInFile := C.CString(inFile)
@@ -235,7 +249,10 @@ func Verify(inFile, proxyAddr string, proxyPort int, usrPass string) (int, error
 
 	rv := C.cie_verify(cInFile, cProxyAddr, C.int(proxyPort), cUsrPass)
 
-	if rv < 0 {
+	// CK_RV is unsigned, so a "rv < 0" check would always be false.
+	// The C API overloads the return value: small numbers are signature
+	// counts, large numbers are CKR_* error codes.
+	if rv >= rvCountLimit {
 		return 0, RV(rv)
 	}
 	return int(rv), nil
@@ -244,14 +261,14 @@ func Verify(inFile, proxyAddr string, proxyPort int, usrPass string) (int, error
 // GetSignCount returns the number of signatures found by the last Verify call.
 func GetSignCount() (int, error) {
 	rv := C.cie_get_sign_count()
-	if rv < 0 {
+	if rv >= rvCountLimit {
 		return 0, RV(rv)
 	}
 	return int(rv), nil
 }
 
-// GetVerifyInfo retrieves signer information for the n-th signature found by the last Verify call.
-// index: zero-based signature index
+// GetVerifyInfo retrieves signer information for the n-th signature found by
+// the last Verify call. index is zero-based.
 func GetVerifyInfo(index int) (*VerifyInfo, error) {
 	var cInfo C.struct_verifyInfo_t
 	rv := C.cie_get_verify_info(C.int(index), &cInfo)
@@ -285,4 +302,79 @@ func ExtractP7M(inFile, outFile string) error {
 		return RV(rv)
 	}
 	return nil
+}
+
+// ReaderCount returns the number of currently attached PC/SC readers.
+func ReaderCount() int {
+	return int(C.cie_reader_count())
+}
+
+// ReaderWatch blocks until the reader count changes from currentCount, and
+// returns the new reader count.
+func ReaderWatch(currentCount int) int {
+	return int(C.cie_reader_watch(C.int(currentCount)))
+}
+
+// ReaderName returns the name of the first attached reader.
+// Returns an empty string if no reader is attached.
+func ReaderName() (string, error) {
+	const bufLen = 256
+	buf := make([]byte, bufLen)
+	n := C.cie_reader_name((*C.char)(unsafe.Pointer(&buf[0])), C.int(bufLen))
+	if n < 0 {
+		return "", fmt.Errorf("cie_reader_name failed: %d", int(n))
+	}
+	if n == 0 {
+		return "", nil
+	}
+	// Trim at NUL or use exact length if the C side reports it.
+	end := int(n)
+	if end > bufLen {
+		end = bufLen
+	}
+	for i := 0; i < end; i++ {
+		if buf[i] == 0 {
+			end = i
+			break
+		}
+	}
+	return string(buf[:end]), nil
+}
+
+// ErrDigestInfoBufferTooSmall is returned by MakeDigestInfo when the internal
+// buffer is too small. The caller can ignore the error and rely on the retry
+// loop in MakeDigestInfo, or treat it as a programming error.
+var ErrDigestInfoBufferTooSmall = errors.New("digest info buffer too small")
+
+// MakeDigestInfo builds an ASN.1 DigestInfo structure for the given digest
+// algorithm identifier (algid) and digest bytes. The returned slice contains
+// the encoded DigestInfo suitable for use with PKCS#11 raw RSA signing.
+func MakeDigestInfo(algid int, digest []byte) ([]byte, error) {
+	if len(digest) == 0 {
+		return nil, errors.New("digest is empty")
+	}
+	// DigestInfo for SHA-512 is the largest common case and fits well under
+	// 256 bytes. Start at 256 and grow on CKR_BUFFER_TOO_SMALL.
+	bufLen := C.size_t(256)
+	for attempts := 0; attempts < 4; attempts++ {
+		out := make([]byte, bufLen)
+		ok := C.make_digest_info(
+			C.int(algid),
+			(*C.uchar)(unsafe.Pointer(&digest[0])),
+			C.size_t(len(digest)),
+			(*C.uchar)(unsafe.Pointer(&out[0])),
+			&bufLen,
+		)
+		if ok == 1 {
+			return out[:bufLen], nil
+		}
+		// Buffer was too small; bufLen has been updated by the C side, but
+		// also grow defensively in case it didn't.
+		if bufLen < 1024 {
+			bufLen *= 2
+		} else {
+			bufLen += 512
+		}
+	}
+	return nil, ErrDigestInfoBufferTooSmall
 }

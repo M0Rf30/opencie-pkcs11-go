@@ -55,20 +55,17 @@ import (
 )
 
 func main() {
-    // Initialize the library
     if err := pkcs11.Initialize(); err != nil {
         log.Fatal(err)
     }
     defer pkcs11.Finalize()
 
-    // Get library info
     info, err := pkcs11.GetInfo()
     if err != nil {
         log.Fatal(err)
     }
     fmt.Printf("Library: %s\n", info.LibraryDescription)
 
-    // List slots with tokens
     slots, err := pkcs11.GetSlotList(true)
     if err != nil {
         log.Fatal(err)
@@ -79,34 +76,18 @@ func main() {
         return
     }
 
-    // Open a session on the first slot
     session, err := pkcs11.OpenSession(slots[0], pkcs11.CKF_SERIAL_SESSION|pkcs11.CKF_RW_SESSION)
     if err != nil {
         log.Fatal(err)
     }
     defer pkcs11.CloseSession(session)
 
-    // Login with PIN
     if err := pkcs11.Login(session, pkcs11.CKU_USER, "12345678"); err != nil {
         log.Fatal(err)
     }
     defer pkcs11.Logout(session)
 
     fmt.Println("Logged in successfully")
-
-    // Find certificate objects
-    if err := pkcs11.FindObjectsInit(session, []pkcs11.Attribute{
-        {Type: 0x00000000, Value: []byte{0x01}}, // CKA_CLASS = CKO_CERTIFICATE
-    }); err != nil {
-        log.Fatal(err)
-    }
-    defer pkcs11.FindObjectsFinal(session)
-
-    objects, err := pkcs11.FindObjects(session, 10)
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Printf("Found %d certificate(s)\n", len(objects))
 }
 ```
 
@@ -123,41 +104,36 @@ import (
 )
 
 func main() {
-    pan := "1234567890123456" // PAN from your CIE card
-    pin := "12345678"         // 8-digit PIN
+    pan := "1234567890123456"
+    pin := "12345678"
 
-    // Check if card is already enrolled
     if cie.IsEnabled(pan) {
         fmt.Println("Card is already enrolled")
         return
     }
 
-    // Enroll the card
-    // Note: Callbacks are not fully supported; pass nil
     var attempts int
     if err := cie.Enable(pan, pin, &attempts, nil, nil); err != nil {
         log.Fatalf("Enrolment failed: %v (attempts left: %d)", err, attempts)
     }
-
     fmt.Println("Card enrolled successfully")
 
-    // Change PIN
     newPIN := "87654321"
     if err := cie.ChangePin(pin, newPIN, &attempts, nil); err != nil {
         log.Fatalf("PIN change failed: %v (attempts left: %d)", err, attempts)
     }
-
     fmt.Println("PIN changed successfully")
 }
 ```
 
-### CIE: PDF Signing
+### CIE: PDF Signing and Verification
 
 ```go
 package main
 
 import (
     "log"
+    "os"
 
     "github.com/M0Rf30/opencie-pkcs11-go/cie"
 )
@@ -168,163 +144,104 @@ func main() {
     inFile := "document.pdf"
     outFile := "document_signed.pdf"
 
-    // Sign a PDF with visible signature widget
+    var imageData []byte
+    if data, err := os.ReadFile("signature.png"); err == nil {
+        imageData = data
+    }
+
     err := cie.Sign(
         inFile,
-        "PDF",           // signature type
+        "PDF",
         pin,
         pan,
-        0,               // page 0 (first page)
-        100, 100,        // x, y position in points
-        200, 50,         // width, height in points
-        "",              // no signature image
+        0,
+        100, 100,
+        200, 50,
+        imageData,
         outFile,
-        nil,             // progress callback (not supported)
-        nil,             // completed callback (not supported)
+        nil,
+        nil,
     )
     if err != nil {
         log.Fatalf("Signing failed: %v", err)
     }
+    log.Println("Document signed:", outFile)
 
-    log.Println("Document signed successfully:", outFile)
-
-    // Verify the signed document
     sigCount, err := cie.Verify(outFile, "", 0, "")
     if err != nil {
         log.Fatalf("Verification failed: %v", err)
     }
-
     log.Printf("Found %d valid signature(s)\n", sigCount)
 
-    // Get info about the first signature
-    if sigCount > 0 {
-        info, err := cie.GetVerifyInfo(0)
+    for i := 0; i < sigCount; i++ {
+        info, err := cie.GetVerifyInfo(i)
         if err != nil {
             log.Fatal(err)
         }
-        log.Printf("Signer: %s %s\n", info.Name, info.Surname)
-        log.Printf("Signed at: %s\n", info.SigningTime)
-        log.Printf("Valid: %v\n", info.IsSignValid)
+        log.Printf("Signer #%d: %s %s (%s)\n", i+1, info.Name, info.Surname, info.CN)
+        log.Printf("  Signed at: %s\n", info.SigningTime)
+        log.Printf("  Valid: %v\n", info.IsSignValid)
     }
 }
 ```
 
-### Sign: Certificate Enumeration and Signing
+### CIE: Reader Management
 
 ```go
 package main
 
 import (
     "fmt"
-    "log"
 
-    "github.com/M0Rf30/opencie-pkcs11-go/sign"
+    "github.com/M0Rf30/opencie-pkcs11-go/cie"
 )
 
 func main() {
-    // Initialize signing context
-    ctx := sign.SignInit()
-    defer sign.SignCleanup(ctx)
+    n := cie.ReaderCount()
+    fmt.Printf("Readers attached: %d\n", n)
 
-    // Configure PKCS#11 module and slot
-    if err := sign.SignSetString(ctx, sign.OptPKCS11, "/usr/lib/libopencie-pkcs11.so"); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.SignSetInt(ctx, sign.OptSlot, 0); err != nil {
-        log.Fatal(err)
-    }
-
-    // Get available certificates
-    certs, err := sign.SignGetCertificates(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Printf("Found %d certificate(s):\n", len(certs))
-    for i, cert := range certs {
-        fmt.Printf("%d. CN: %s, Valid: %s - %s\n", i+1, cert.CN, cert.ValidFrom, cert.Expiration)
-    }
-
-    if len(certs) == 0 {
-        return
-    }
-
-    // Sign a PDF with the first certificate
-    if err := sign.SignSetString(ctx, sign.OptPin, "12345678"); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.SignSetString(ctx, sign.OptInputFile, "document.pdf"); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.SignSetString(ctx, sign.OptOutputFile, "document_signed.pdf"); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.SignSetInt(ctx, sign.OptInputFileType, sign.FileTypePDF); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.SignSetString(ctx, sign.OptPDFSubfilter, sign.PDFSubfilterETSICAdES); err != nil {
-        log.Fatal(err)
-    }
-
-    if err := sign.SignSign(ctx); err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Println("Document signed successfully")
-}
-```
-
-### Sign: Signature Verification
-
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-
-    "github.com/M0Rf30/opencie-pkcs11-go/sign"
-)
-
-func main() {
-    ctx := sign.VerifyInit()
-    defer sign.VerifyCleanup(ctx)
-
-    // Configure verification
-    if err := sign.VerifySetString(ctx, sign.OptInputFile, "document_signed.pdf"); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.VerifySetInt(ctx, sign.OptVerifyRevocation, 1); err != nil {
-        log.Fatal(err)
-    }
-    if err := sign.VerifySetString(ctx, sign.OptCACertDir, "/etc/ssl/certs"); err != nil {
-        log.Fatal(err)
-    }
-
-    // Perform verification
-    result, err := sign.VerifyVerify(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Printf("Verification result: 0x%08X\n", result.ErrorCode)
-    fmt.Printf("Found %d signer(s):\n", len(result.VerifyInfo.SignerInfos))
-
-    for i, signer := range result.VerifyInfo.SignerInfos {
-        fmt.Printf("%d. %s %s (%s)\n", i+1, signer.GivenName, signer.Surname, signer.CN)
-        fmt.Printf("   Signed: %s\n", signer.SigningTime)
-        fmt.Printf("   Valid: %s - %s\n", signer.ValidFrom, signer.Expiration)
-        if signer.RevocationInfo != nil {
-            fmt.Printf("   Revocation: %d\n", signer.RevocationInfo.RevocationStatus)
+    if n > 0 {
+        if name, err := cie.ReaderName(); err == nil {
+            fmt.Printf("First reader: %s\n", name)
         }
     }
+
+    fmt.Println("Waiting for reader change...")
+    n = cie.ReaderWatch(n)
+    fmt.Printf("Reader count is now: %d\n", n)
+}
+```
+
+### CIE: DigestInfo Encoding
+
+```go
+package main
+
+import (
+    "crypto/sha256"
+    "fmt"
+    "log"
+
+    "github.com/M0Rf30/opencie-pkcs11-go/cie"
+)
+
+func main() {
+    msg := []byte("hello world")
+    hash := sha256.Sum256(msg)
+
+    const algidSHA256 = 4
+    di, err := cie.MakeDigestInfo(algidSHA256, hash[:])
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("DigestInfo (%d bytes): %x\n", len(di), di)
 }
 ```
 
 ## Limitations
 
-- **Callbacks**: The `cie` package does not fully support passing Go callbacks to C. Progress and completion callbacks must be passed as `nil`. A future version may implement a cookie-based mechanism to enable Go callback support.
-- **Thread Safety**: The underlying C library uses locking; however, Go code should avoid concurrent calls to the same session or context from multiple goroutines without external synchronization.
+- **Callbacks**: The `cie` package does not currently support passing Go callbacks through cgo. Progress and completion callbacks must be passed as `nil`. A future version may implement a cookie-based mechanism.
+- **Thread Safety**: The underlying C library uses locking; Go code should still avoid concurrent calls to the same session or context from multiple goroutines without external synchronization.
 - **Memory Management**: The bindings handle C memory allocation/deallocation internally. Do not manually free pointers returned by the C library.
 
 ## Platform Support
@@ -334,9 +251,21 @@ func main() {
 - **macOS** (arm64)
 - **Android** (arm64, experimental)
 
+## Changelog
+
+### Unreleased — sync with libopencie-pkcs11 main
+
+- **Breaking**: `cie.Sign` now takes `imageData []byte` instead of an image path string, matching the upstream 14-argument `cie_sign` signature in `cie_ext.h`.
+- **Breaking**: Removed the `sign` package. The corresponding `cie_sign_*` C++ API was removed from libopencie-pkcs11; the public signing flow is now exposed through `cie.Sign`.
+- **Fix**: `cie.Verify` and `cie.GetSignCount` no longer rely on a `rv < 0` check on an unsigned `CK_RV`. Returns above `0x1000` are now correctly reported as `RV` errors.
+- Added `cie.ReaderCount`, `cie.ReaderWatch`, `cie.ReaderName` wrappers.
+- Added `cie.MakeDigestInfo` wrapper around `make_digest_info`.
+- Added `cie.GetVerifyInfo` returning a typed `VerifyInfo` struct.
+- Added GitHub Actions CI building libopencie-pkcs11 from source and running `go vet`/`go build`/`gofmt` against the bindings.
+
 ## License
 
-This Go module is released under the same license as the underlying library (GPL-2.0-or-later).  
+This Go module is released under the same license as the underlying library (GPL-2.0-or-later).
 See the [opencie-pkcs11 LICENSE](https://github.com/M0Rf30/opencie-pkcs11/blob/main/LICENSE.md) for details.
 
 ## Links
