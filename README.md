@@ -10,9 +10,10 @@ go get github.com/M0Rf30/opencie-pkcs11-go
 
 ### Build Requirements
 
-- **libopencie-pkcs11** must be installed on your system
+- **libopencie-pkcs11 1.0.12 or newer** must be installed on your system
   - See [opencie-pkcs11 releases](https://github.com/M0Rf30/opencie-pkcs11/releases) for pre-built binaries
   - Or build from [source](https://github.com/M0Rf30/opencie-pkcs11)
+  - Earlier versions do not export `cie_classify_sw`/`cie_last_error`, so cgo will fail to resolve them
 - **CGO_ENABLED=1** (required for cgo)
 - A C compiler (gcc, clang, or MinGW-w64 on Windows)
 
