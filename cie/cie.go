@@ -55,6 +55,37 @@ const (
 	rvCountLimit C.CK_RV = 0x1000
 )
 
+// ErrorKind is a semantic classification of a CIE card failure,
+// derived from the ISO 7816 status word.
+type ErrorKind C.cie_error_kind
+
+const (
+	// ErrNone indicates no error.
+	ErrNone ErrorKind = 0
+	// ErrWrongPin indicates an incorrect PIN (0x63Cx, 0x6300, 0x6700).
+	ErrWrongPin ErrorKind = 1
+	// ErrPinBlocked indicates the PIN is blocked (0x6983).
+	ErrPinBlocked ErrorKind = 2
+	// ErrPinNotSet indicates the PIN has not been set (0x6984).
+	ErrPinNotSet ErrorKind = 3
+	// ErrSecurityNotSatisfied indicates a security condition not met
+	// (0x6982).
+	ErrSecurityNotSatisfied ErrorKind = 4
+	// ErrFileNotFound indicates a file was not found (0x6A82).
+	ErrFileNotFound ErrorKind = 5
+	// ErrWrongParams indicates incorrect parameters (0x6A80, 0x6A86,
+	// 0x6A88, 0x6B00).
+	ErrWrongParams ErrorKind = 6
+	// ErrInsNotSupported indicates an unsupported instruction (0x6D00,
+	// 0x6E00).
+	ErrInsNotSupported ErrorKind = 7
+	// ErrCardCommunication indicates a card communication failure
+	// (transport/SM failure with no usable status word).
+	ErrCardCommunication ErrorKind = 8
+	// ErrUnknown indicates an unclassified status word.
+	ErrUnknown ErrorKind = 9
+)
+
 // ProgressCallback is a placeholder type. Go callbacks are not currently
 // passed through cgo to the C library; pass nil to functions that accept it.
 type ProgressCallback func(progress int, message string) error
@@ -379,4 +410,28 @@ func MakeDigestInfo(algid int, digest []byte) ([]byte, error) {
 		}
 	}
 	return nil, ErrDigestInfoBufferTooSmall
+}
+
+// ClassifySW classifies an ISO 7816 status word into a semantic error kind.
+// This is a pure function; no card is required.
+func ClassifySW(sw uint16) ErrorKind {
+	return ErrorKind(C.cie_classify_sw(C.uint16_t(sw)))
+}
+
+// LastError returns the most recent error from a failed cie_* call on the
+// calling OS thread. It returns the semantic error kind and the raw ISO 7816
+// status word (or 0 if the failure carried no status word).
+//
+// A successful cie_* call resets the recorded error to ErrNone/0.
+//
+// WARNING: In Go, a goroutine can be rescheduled onto a different OS thread
+// between calls. If your code calls a card operation followed by LastError(),
+// you MUST lock the OS thread around both calls using runtime.LockOSThread()
+// to ensure they execute on the same thread, else LastError() may report a
+// stale or unrelated error.
+func LastError() (ErrorKind, uint16) {
+	var cKind C.cie_error_kind
+	var cSw C.uint16_t
+	_ = C.cie_last_error(&cKind, &cSw)
+	return ErrorKind(cKind), uint16(cSw)
 }
