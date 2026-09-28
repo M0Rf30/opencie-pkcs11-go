@@ -10,10 +10,10 @@ go get github.com/M0Rf30/opencie-pkcs11-go
 
 ### Build Requirements
 
-- **libopencie-pkcs11 1.0.12 or newer** must be installed on your system
+- **libopencie-pkcs11 1.0.15 or newer** must be installed on your system
   - See [opencie-pkcs11 releases](https://github.com/M0Rf30/opencie-pkcs11/releases) for pre-built binaries
   - Or build from [source](https://github.com/M0Rf30/opencie-pkcs11)
-  - Earlier versions do not export `cie_classify_sw`/`cie_last_error`, so cgo will fail to resolve them
+  - Earlier versions do not export `cie_classify_sw`/`cie_last_error`, so cgo will fail to resolve them; versions before 1.0.15 also fail to recognize cards paired via the official CIE ID app in `IsEnabled`/certificate lookups
 - **CGO_ENABLED=1** (required for cgo)
 - A C compiler (gcc, clang, or MinGW-w64 on Windows)
 
@@ -253,6 +253,14 @@ func main() {
 - **Android** (arm64, experimental)
 
 ## Changelog
+
+### v0.1.1
+
+- Require **libopencie-pkcs11 1.0.15 or newer**. Since 1.0.15, `cie_is_enabled`
+  also recognizes cards paired only through the official IPZS CIE ID app
+  (present on the reader, no local cache entry), and certificate lookups
+  fall back to reading directly from the card when the cache has none.
+  `IsEnabled` doc comment updated to describe this behaviour.
 
 ### Unreleased — sync with libopencie-pkcs11 main
 

@@ -136,7 +136,11 @@ func Enable(pan, pin string, attempts *int, progress ProgressCallback, completed
 }
 
 // IsEnabled checks whether the card identified by PAN is currently enrolled.
-// Returns true if enrolled, false if not.
+// Since libopencie-pkcs11 1.0.15, this returns true if the PAN is enrolled
+// in the local cache (~/.CIEPKI) OR if a card with that PAN is currently
+// inserted (checked directly on the card, no PIN required). This means
+// cards paired only through the official IPZS CIE ID app are now reported
+// as enabled when present.
 func IsEnabled(pan string) bool {
 	cPan := C.CString(pan)
 	defer C.free(unsafe.Pointer(cPan))
