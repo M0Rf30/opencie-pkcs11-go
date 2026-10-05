@@ -346,7 +346,7 @@ go test ./...
 
 ## Changelog
 
-### Unreleased — libopencie-pkcs11 1.3.0
+### v0.2.0 — libopencie-pkcs11 1.3.0
 
 - Require **libopencie-pkcs11 1.3.0 or newer**.
 - Added `cie.ReadDGSCan` (`cie_read_dgs_can`, PACE with the 6-digit CAN) and `cie.ReadDGS` (`cie_read_dgs`, PIN-based fallback), returning `*cie.DataGroups`. Failures are `*cie.CardError` values carrying the `RV`, the `cie_last_error` kind and the status word; `errors.Is` matches `cie.ErrCANRejected` (wrong CAN: `CKR_PIN_INCORRECT` + `ErrWrongCan`), `cie.ErrExtendedAPDUNotSupported` (`CKR_DEVICE_ERROR` + `ErrInsNotSupported`) and `cie.ErrPACENotSupported` (`CKR_FUNCTION_NOT_SUPPORTED` + `ErrUnsupportedCard`).
